@@ -1161,11 +1161,31 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             raise
     
     async def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
-        """특정 문서의 모든 청크 조회 (순서대로 정렬)"""
+        """특정 문서의 모든 청크 조회 (순서대로 정렬) - Point ID 기반"""
         try:
             logger.info(f"Retrieving chunks for document: {document_id}")
             
-            # document_id(file_hash)로 모든 청크 조회
+            # 1단계: Point ID로 단일 포인트 조회하여 file_hash 추출
+            point_result = await asyncio.to_thread(
+                self.qdrant_client.retrieve,
+                collection_name=self.collection_name,
+                ids=[document_id],
+                with_payload=True
+            )
+            
+            if not point_result:
+                logger.warning(f"No point found for document ID: {document_id}")
+                return []
+            
+            # file_hash 추출
+            file_hash = point_result[0].payload['metadata'].get('file_hash')
+            if not file_hash:
+                logger.error(f"No file_hash found in document {document_id}")
+                return []
+                
+            logger.info(f"Found file_hash {file_hash} for document {document_id}")
+            
+            # 2단계: file_hash로 모든 청크 조회
             search_result = await asyncio.to_thread(
                 self.qdrant_client.scroll,
                 collection_name=self.collection_name,
@@ -1173,7 +1193,7 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
                     must=[
                         FieldCondition(
                             key="metadata.file_hash",
-                            match=MatchValue(value=document_id)
+                            match=MatchValue(value=file_hash)
                         )
                     ]
                 ),
@@ -1183,7 +1203,7 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             
             points = search_result[0]
             if not points:
-                logger.warning(f"No chunks found for document: {document_id}")
+                logger.warning(f"No chunks found for file_hash: {file_hash}")
                 return []
             
             chunks = []
