@@ -1115,7 +1115,7 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
                 # 중복 문서 체크 및 처리
                 if doc_id not in unique_docs:
                     unique_docs[doc_id] = {
-                        'id': str(point.id),
+                        'id': doc_id,  # file_hash를 ID로 사용
                         'filename': metadata.get('source_file', 'unknown'),
                         'file_type': metadata.get('file_type', 'unknown'),
                         'file_size': metadata.get('file_size', 0),
@@ -1145,16 +1145,36 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             }
     
     async def delete_document(self, document_id: str):
-        """문서 삭제"""
+        """문서 삭제 - file_hash 또는 point ID 지원"""
         try:
-            await asyncio.to_thread(
+            # 먼저 file_hash로 삭제 시도
+            delete_result = await asyncio.to_thread(
                 self.qdrant_client.delete,
                 collection_name=self.collection_name,
-                points_selector=[document_id]
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="metadata.file_hash",
+                            match=MatchValue(value=document_id)
+                        )
+                    ]
+                )
             )
             
+            # 삭제된 포인트 수 확인
+            if hasattr(delete_result, 'operation_id') and delete_result.operation_id:
+                logger.info(f"Document deleted by file_hash: {document_id}")
+            else:
+                # file_hash로 삭제되지 않은 경우, point ID로 시도 (레거시 지원)
+                logger.info(f"No documents found by file_hash, trying point ID: {document_id}")
+                await asyncio.to_thread(
+                    self.qdrant_client.delete,
+                    collection_name=self.collection_name,
+                    points_selector=[document_id]
+                )
+                logger.info(f"Document deleted by point ID: {document_id}")
+            
             await self._update_collection_stats()
-            logger.info(f"Document deleted: {document_id}")
             
         except Exception as e:
             logger.error(f"Document deletion failed: {e}")
@@ -1165,7 +1185,7 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
         try:
             logger.info(f"Retrieving chunks for document: {document_id}")
             
-            # document_id(file_hash)로 모든 청크 조회
+            # 먼저 file_hash로 검색 시도
             search_result = await asyncio.to_thread(
                 self.qdrant_client.scroll,
                 collection_name=self.collection_name,
@@ -1182,6 +1202,44 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             )
             
             points = search_result[0]
+            
+            # file_hash로 찾지 못한 경우, point ID로 검색 시도 (레거시 지원)
+            if not points:
+                logger.info(f"No chunks found by file_hash, trying point ID: {document_id}")
+                try:
+                    # 단일 포인트 조회
+                    point_result = await asyncio.to_thread(
+                        self.qdrant_client.retrieve,
+                        collection_name=self.collection_name,
+                        ids=[document_id],
+                        with_payload=True
+                    )
+                    
+                    if point_result:
+                        # 해당 포인트의 file_hash를 추출하여 전체 문서 청크 검색
+                        file_hash = point_result[0].payload['metadata'].get('file_hash')
+                        if file_hash:
+                            logger.info(f"Found file_hash {file_hash} from point ID, searching all chunks")
+                            search_result = await asyncio.to_thread(
+                                self.qdrant_client.scroll,
+                                collection_name=self.collection_name,
+                                scroll_filter=Filter(
+                                    must=[
+                                        FieldCondition(
+                                            key="metadata.file_hash",
+                                            match=MatchValue(value=file_hash)
+                                        )
+                                    ]
+                                ),
+                                limit=10000,
+                                with_payload=True
+                            )
+                            points = search_result[0]
+                        
+                except Exception as e:
+                    logger.warning(f"Point ID search failed: {e}")
+                    points = []
+            
             if not points:
                 logger.warning(f"No chunks found for document: {document_id}")
                 return []
