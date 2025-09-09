@@ -71,6 +71,7 @@ class ConfigLoader:
             'COHERE_API_KEY': ('reranking', 'providers', 'cohere', 'api_key'),
             'QDRANT_URL': ('qdrant', 'url'),
             'QDRANT_API_KEY': ('qdrant', 'api_key'),
+            'QDRANT_COLLECTION_NAME': ('qdrant', 'collection_name'),
             'QDRANT_HOST': ('qdrant', 'host'),
             'QDRANT_PORT': ('qdrant', 'port'),
             'REDIS_URL': ('session', 'redis_url'),

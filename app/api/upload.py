@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
+from fastapi.responses import Response
 
 from ..lib.logger import get_logger
 
@@ -599,3 +600,87 @@ async def get_supported_types():
         "max_file_size": config.get('uploads', {}).get('max_file_size', 50 * 1024 * 1024),
         "max_files_per_request": 1
     }
+
+@router.get("/upload/documents/{document_id}/download")
+async def download_document(document_id: str):
+    """문서 다운로드 - 청크 재구성 방식"""
+    try:
+        # document_id 검증 (보안: UUID 형태만 허용)
+        import re
+        if not re.match(r'^[a-f0-9\-]{36}$', document_id):
+            raise HTTPException(status_code=400, detail="Invalid document ID format")
+        
+        retrieval_module = modules.get('retrieval')
+        if not retrieval_module:
+            raise HTTPException(status_code=500, detail="Retrieval module not available")
+        
+        logger.info(f"Document download requested: {document_id}")
+        
+        # 문서의 모든 청크 조회
+        chunks = await retrieval_module.get_document_chunks(document_id)
+        if not chunks:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # 첫 번째 청크에서 메타데이터 추출
+        first_chunk = chunks[0]
+        metadata = first_chunk['metadata']
+        filename = metadata.get('source_file', f'document_{document_id[:8]}.txt')
+        file_type = metadata.get('file_type', 'txt')
+        
+        # 모든 청크의 내용을 순서대로 결합
+        combined_content = ""
+        for i, chunk in enumerate(chunks):
+            content = chunk['content'].strip()
+            if content:
+                combined_content += content
+                # 청크 간 구분을 위한 개행 (마지막 청크 제외)
+                if i < len(chunks) - 1:
+                    combined_content += "\n\n"
+        
+        # MIME 타입 및 파일명 결정
+        mime_types = {
+            'txt': 'text/plain',
+            'md': 'text/markdown',
+            'csv': 'text/csv',
+            'html': 'text/html',
+            'json': 'application/json'
+        }
+        
+        # 바이너리 파일의 경우 텍스트 추출본으로 제공
+        if file_type in ['pdf', 'docx', 'xlsx']:
+            # 파일명을 _extracted.txt로 변경
+            name_without_ext = Path(filename).stem
+            filename = f"{name_without_ext}_extracted.txt"
+            content_type = 'text/plain'
+            logger.info(f"Binary file {file_type} converted to text extract: {filename}")
+        else:
+            content_type = mime_types.get(file_type, 'text/plain')
+        
+        # UTF-8로 인코딩
+        content_bytes = combined_content.encode('utf-8')
+        
+        logger.info(f"Document download prepared: {filename} ({len(content_bytes)} bytes, {len(chunks)} chunks)")
+        
+        # 파일 다운로드 응답
+        return Response(
+            content=content_bytes,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+                "Content-Type": f"{content_type}; charset=utf-8",
+                "Content-Length": str(len(content_bytes)),
+                "X-Document-ID": document_id,
+                "X-Chunk-Count": str(len(chunks)),
+                "X-Original-Type": file_type
+            }
+        )
+        
+    except HTTPException:
+        # FastAPI HTTPException은 그대로 전파
+        raise
+    except Exception as error:
+        logger.error(f"Document download error for {document_id}: {error}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Download failed: {str(error)}"
+        )

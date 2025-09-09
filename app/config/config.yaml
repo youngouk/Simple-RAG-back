@@ -11,7 +11,7 @@ server:
 qdrant:
   url: "${QDRANT_URL}"
   api_key: "${QDRANT_API_KEY:-}"
-  collection_name: "documents"
+  collection_name: "${QDRANT_COLLECTION_NAME:-documents-junggu}"
   vector_size: 3072  # gemini-embedding-001의 3072 차원에 맞춤
   distance: "cosine"
   hybrid_search:
@@ -37,7 +37,7 @@ llm:
   auto_fallback: true  # 자동 폴백 활성화
   fallback_order: ["openai", "anthropic", "google"]  # 폴백 순서 설정
   google:
-    model: "gemini-2.0-flash-exp"
+    model: "gemini-2.5-pro"
     api_key: "${GOOGLE_API_KEY:-}"
     temperature: 0.3
     max_tokens: 10000

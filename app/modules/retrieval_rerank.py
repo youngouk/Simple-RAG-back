@@ -1160,6 +1160,49 @@ Do not include any other text, explanation, or formatting. Only the JSON object.
             logger.error(f"Document deletion failed: {e}")
             raise
     
+    async def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        """특정 문서의 모든 청크 조회 (순서대로 정렬)"""
+        try:
+            logger.info(f"Retrieving chunks for document: {document_id}")
+            
+            # document_id(file_hash)로 모든 청크 조회
+            search_result = await asyncio.to_thread(
+                self.qdrant_client.scroll,
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="metadata.file_hash",
+                            match=MatchValue(value=document_id)
+                        )
+                    ]
+                ),
+                limit=10000,  # 충분히 큰 수로 모든 청크 가져오기
+                with_payload=True
+            )
+            
+            points = search_result[0]
+            if not points:
+                logger.warning(f"No chunks found for document: {document_id}")
+                return []
+            
+            chunks = []
+            for point in points:
+                chunks.append({
+                    'content': point.payload['content'],
+                    'metadata': point.payload['metadata']
+                })
+            
+            # chunk_index로 정렬 (순서 보장)
+            chunks.sort(key=lambda x: x['metadata'].get('chunk_index', 0))
+            
+            logger.info(f"Retrieved {len(chunks)} chunks for document: {document_id}")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"Failed to get document chunks for {document_id}: {e}")
+            return []
+    
     async def get_stats(self) -> Dict[str, Any]:
         """통계 반환"""
         await self._update_collection_stats()
